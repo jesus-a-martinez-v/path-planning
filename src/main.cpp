@@ -5,6 +5,7 @@
 #include <iostream>
 #include <thread>
 #include <vector>
+#include <cfloat>
 #include "Eigen-3.3/Eigen/Core"
 #include "Eigen-3.3/Eigen/QR"
 #include "json.hpp"
@@ -45,22 +46,20 @@ double distance(double x1, double y1, double x2, double y2) {
 
 int ClosestWaypoint(double x, double y, vector<double> maps_x, vector<double> maps_y) {
 
-	double closestLen = 100000; //large number
+    auto closestLength = DBL_MAX; //large number
 	int closestWaypoint = 0;
 
-	for(int i = 0; i < maps_x.size(); i++) {
+	for (unsigned short i = 0; i < maps_x.size(); i++) {
 		double map_x = maps_x[i];
 		double map_y = maps_y[i];
 		double dist = distance(x,y,map_x,map_y);
-		if(dist < closestLen) {
-			closestLen = dist;
+		if(dist < closestLength) {
+			closestLength = dist;
 			closestWaypoint = i;
 		}
-
 	}
 
 	return closestWaypoint;
-
 }
 
 int NextWaypoint(double x, double y, double theta, vector<double> maps_x, vector<double> maps_y) {
@@ -74,12 +73,11 @@ int NextWaypoint(double x, double y, double theta, vector<double> maps_x, vector
 
 	double angle = abs(theta - heading);
 
-	if(angle > pi() / 4) {
+	if (angle > pi() / 4) {
 		closestWaypoint++;
 	}
 
 	return closestWaypoint;
-
 }
 
 // Transform from Cartesian x,y coordinates to Frenet s,d coordinates
@@ -89,7 +87,7 @@ vector<double> getFrenet(double x, double y, double theta, vector<double> maps_x
 	int prev_wp = next_wp - 1;
 
     if(next_wp == 0) {
-		prev_wp = maps_x.size() - 1;
+		prev_wp = static_cast<int>(maps_x.size() - 1);
 	}
 
 	double n_x = maps_x[next_wp] - maps_x[prev_wp];
@@ -209,12 +207,12 @@ int main() {
 
       if (!s.empty()) {
         auto j = json::parse(s);
-        
+
         string event = j[0].get<string>();
-        
+
         if (event == "telemetry") {
           // j[1] is the data JSON object
-          
+
         	// Main car's localization Data
           	double car_x = j[1]["x"];
           	double car_y = j[1]["y"];
@@ -226,118 +224,159 @@ int main() {
           	// Previous path data given to the Planner
           	auto previous_path_x = j[1]["previous_path_x"];
           	auto previous_path_y = j[1]["previous_path_y"];
-          	// Previous path's end s and d values 
+
+            // Previous path's end s and d values
           	double end_path_s = j[1]["end_path_s"];
           	double end_path_d = j[1]["end_path_d"];
 
           	// Sensor Fusion Data, a list of all other cars on the same side of the road.
           	auto sensor_fusion = j[1]["sensor_fusion"];
 
-            int prev_size = previous_path_x.size();
+            int previous_size = previous_path_x.size();
 
-            if (prev_size > 0) {
+            if (previous_size > 0) {
                 car_s = end_path_s;
             }
 
             bool too_close = false;
+            bool too_close_left = false;
+            bool too_close_right = false;
 
             // Find ref_v to use
-            for (auto &car : sensor_fusion) {
-                // There's a car in my lane
-                float d = car[6];
+            for (auto &object : sensor_fusion) {
+                // There's an object in my lane
+                float d = object[6];
 
-                if (d < (2 + 4 * lane + 2) && d > (2 + 4 * lane - 2)) {
-                    double vx = car[3];
-                    double vy = car[4];
-                    double check_speed = sqrt(vx * vx + vy * vy);
-                    double check_car_s = car[5];
+                if (d > (2 + 4 * (lane + 1) - 2) && d < (2 + 4 * (lane + 1) + 2) && lane != 2) {
+                    double object_x_velocity = object[3];
+                    double object_y_velocity = object[4];
+                    double check_speed = sqrt(object_x_velocity * object_x_velocity + object_y_velocity * object_y_velocity);
+                    double check_car_s = object[5];
 
-                    check_car_s += ((double) prev_size * 0.02 * check_speed);  // Projects s value outwards
+                    check_car_s += ((double) previous_size * 0.02 * check_speed);  // Projects s value outwards
+
+                    if ((-10 < (check_car_s - car_s) && (check_car_s - car_s) < 10)) {
+                        too_close_right = true;
+                    }
+                }
+
+                if (d > (2 + 4 * (lane - 1) + 2) && d < (2 + 4 * (lane - 1) + 2) && lane != 0) {
+                    double object_x_velocity = object[3];
+                    double object_y_velocity = object[4];
+                    double check_speed = sqrt(object_x_velocity * object_x_velocity + object_y_velocity * object_y_velocity);
+                    double check_car_s = object[5];
+
+                    check_car_s += ((double) previous_size * 0.02 * check_speed);  // Projects s value outwards
+
+                    if ((-10 < (check_car_s - car_s) && (check_car_s - car_s) < 10) ) {
+                        too_close_left = true;
+                    }
+                }
+
+                if (d > (2 + 4 * lane - 2) && d < (2 + 4 * lane + 2)) {
+                    double object_x_velocity = object[3];
+                    double object_y_velocity = object[4];
+                    double check_speed = sqrt(object_x_velocity * object_x_velocity + object_y_velocity * object_y_velocity);
+                    double check_car_s = object[5];
+
+                    check_car_s += ((double) previous_size * 0.02 * check_speed);  // Projects s value outwards
 
                     if ((check_car_s > car_s) && ((check_car_s - car_s) < 30)) {
                         // TODO Improve logic
-                        // ref_vel = 29.5;
                         too_close = true;
 
-                        if (lane > 0) {
-                            lane = 0;
-                        } else if (lane < 2) {
-                            lane = 2;
+                        if (lane == 0 && !too_close_right) {
+                            lane = 1;
+                        } else if (lane == 2 && !too_close_left) {
+                            lane = 1;
+                        } else {
+                            if (!too_close_left) {
+                                lane = 0;
+                            } else if (!too_close_right) {
+                                lane = 2;
+                            }
                         }
+
+
+//                        if (lane > 0) {
+//                            lane -= 1;
+//                        } else if (lane < 2) {
+//                            lane += 1;
+//                        }
                     }
                 }
             }
 
             if (too_close) {
-                ref_vel -= .224;
+                ref_vel -= 0.224;
             } else if(ref_vel < 49.5){
-                ref_vel += .224;
+                ref_vel += 0.224;
             }
 
-            vector<double> ptsx;
-            vector<double> ptsy;
+            vector<double> points_x;
+            vector<double> points_y;
 
             double ref_x = car_x;
             double ref_y = car_y;
-            double ref_yaw = deg2rad(car_yaw);
+            double reference_yaw = deg2rad(car_yaw);
 
-            if (prev_size < 2) {
+            if (previous_size < 2) {
                 double prev_car_x = car_x - cos(car_yaw);
                 double prev_car_y = car_y - sin(car_yaw);
 
-                ptsx.push_back(prev_car_x);
-                ptsx.push_back(car_x);
+                points_x.push_back(prev_car_x);
+                points_x.push_back(car_x);
 
-                ptsy.push_back(prev_car_y);
-                ptsy.push_back(car_y);
+                points_y.push_back(prev_car_y);
+                points_y.push_back(car_y);
             } else {
-                ref_x = previous_path_x[prev_size - 1];
-                ref_y = previous_path_y[prev_size - 1];
+                ref_x = previous_path_x[previous_size - 1];
+                ref_y = previous_path_y[previous_size - 1];
 
-                double ref_x_prev = previous_path_x[prev_size - 2];
-                double ref_y_prev = previous_path_y[prev_size - 2];
-                ref_yaw = atan2(ref_y - ref_y_prev, ref_x - ref_x_prev);
+                double ref_x_prev = previous_path_x[previous_size - 2];
+                double ref_y_prev = previous_path_y[previous_size - 2];
+                reference_yaw = atan2(ref_y - ref_y_prev, ref_x - ref_x_prev);
 
-                ptsx.push_back(ref_x_prev);
-                ptsx.push_back(ref_x);
+                points_x.push_back(ref_x_prev);
+                points_x.push_back(ref_x);
 
-                ptsy.push_back(ref_y_prev);
-                ptsy.push_back(ref_y);
+                points_y.push_back(ref_y_prev);
+                points_y.push_back(ref_y);
             }
 
-            vector<double> next_wp0 = getXY(car_s + 30, 2 + 4 * lane, map_waypoints_s, map_waypoints_x, map_waypoints_y);
-            vector<double> next_wp1 = getXY(car_s + 60, 2 + 4 * lane, map_waypoints_s, map_waypoints_x, map_waypoints_y);
-            vector<double> next_wp2 = getXY(car_s + 90, 2 + 4 * lane, map_waypoints_s, map_waypoints_x, map_waypoints_y);
+            vector<double> next_waypoint_0 = getXY(car_s + 30, 2 + 4 * lane, map_waypoints_s, map_waypoints_x, map_waypoints_y);
+            vector<double> next_waypoint_1 = getXY(car_s + 60, 2 + 4 * lane, map_waypoints_s, map_waypoints_x, map_waypoints_y);
+            vector<double> next_waypoint_2 = getXY(car_s + 90, 2 + 4 * lane, map_waypoints_s, map_waypoints_x, map_waypoints_y);
 
-            ptsx.push_back(next_wp0[0]);
-            ptsx.push_back(next_wp1[0]);
-            ptsx.push_back(next_wp2[0]);
+            points_x.push_back(next_waypoint_0[0]);
+            points_x.push_back(next_waypoint_1[0]);
+            points_x.push_back(next_waypoint_2[0]);
 
-            ptsy.push_back(next_wp0[1]);
-            ptsy.push_back(next_wp1[1]);
-            ptsy.push_back(next_wp2[1]);
+            points_y.push_back(next_waypoint_0[1]);
+            points_y.push_back(next_waypoint_1[1]);
+            points_y.push_back(next_waypoint_2[1]);
 
-            for (unsigned short i = 0; i < ptsx.size(); i++) {
-                double shift_x = ptsx[i] - ref_x;
-                double shift_y = ptsy[i] - ref_y;
+            for (unsigned short i = 0; i < points_x.size(); i++) {
+                double shift_x = points_x[i] - ref_x;
+                double shift_y = points_y[i] - ref_y;
 
-                ptsx[i] = shift_x * cos(0 - ref_yaw) - shift_y * sin(0 - ref_yaw);
-                ptsy[i] = shift_x * sin(0 - ref_yaw) + shift_y * cos(0 - ref_yaw);
+                points_x[i] = shift_x * cos(0 - reference_yaw) - shift_y * sin(0 - reference_yaw);
+                points_y[i] = shift_x * sin(0 - reference_yaw) + shift_y * cos(0 - reference_yaw);
             }
 
             // Create a spline
             tk::spline spline;
 
             // Set (x, y) points to the spline
-            spline.set_points(ptsx, ptsy);
+            spline.set_points(points_x, points_y);
 
-            vector<double> next_x_vals;
-            vector<double> next_y_vals;
+            vector<double> next_x_values;
+            vector<double> next_y_values;
 
             // Start with all of the previous path points from last time
             for (unsigned short i = 0; i < previous_path_x.size(); i++) {
-                next_x_vals.push_back(previous_path_x[i]);
-                next_y_vals.push_back(previous_path_y[i]);
+                next_x_values.push_back(previous_path_x[i]);
+                next_y_values.push_back(previous_path_y[i]);
             }
 
             // Calculate how to break up spline points so that we travel at our desired reference velocity
@@ -345,42 +384,42 @@ int main() {
             double target_y = spline(target_x);
             double target_x_squared = target_x * target_x;
             double target_y_squared = target_y * target_y;
-            double target_dist = sqrt(target_x_squared + target_y_squared);
+            double target_distance = sqrt(target_x_squared + target_y_squared);
 
             double x_add_on = 0;
 
             for (unsigned short i = 1; i <= 50 - previous_path_x.size(); i++) {
-                double N = target_dist / (0.02 * ref_vel / 2.24);
+                double N = target_distance / (0.02 * ref_vel / 2.24);
                 double x_point = x_add_on + target_x / N;
                 double y_point = spline(x_point);
 
                 x_add_on = x_point;
 
-                double x_ref = x_point;
-                double y_ref = y_point;
+                double x_reference = x_point;
+                double y_reference = y_point;
 
                 // Rotate back to normal after rotating it earlier
-                x_point = x_ref * cos(ref_yaw) - y_ref * sin(ref_yaw);
-                y_point = x_ref * sin(ref_yaw) + y_ref * cos(ref_yaw);
+                x_point = x_reference * cos(reference_yaw) - y_reference * sin(reference_yaw);
+                y_point = x_reference * sin(reference_yaw) + y_reference * cos(reference_yaw);
 
                 x_point += ref_x;
                 y_point += ref_y;
 
-                next_x_vals.push_back(x_point);
-                next_y_vals.push_back(y_point);
+                next_x_values.push_back(x_point);
+                next_y_values.push_back(y_point);
             }
 
             json msgJson;
 
             // TODO: define a path made up of (x, y) points that the car will visit sequentially every .02 seconds
-          	msgJson["next_x"] = next_x_vals;
-          	msgJson["next_y"] = next_y_vals;
+          	msgJson["next_x"] = next_x_values;
+          	msgJson["next_y"] = next_y_values;
 
           	auto msg = "42[\"control\"," +  msgJson.dump() + "]";
 
           	//this_thread::sleep_for(chrono::milliseconds(1000));
           	ws.send(msg.data(), msg.length(), uWS::OpCode::TEXT);
-          
+
         }
       } else {
         // Manual driving
