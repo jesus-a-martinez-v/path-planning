@@ -24,6 +24,10 @@ double rad2deg(double x) { return x * 180 / pi(); }
 const double LEFT_LANE = 0;
 const double CENTER_LANE = 1;
 const double RIGHT_LANE = 2;
+const double LANE_LENGTH = 4;
+const double LANE_RELATIVE_CENTER = 2;
+
+double CAR_POINT_FREQUENCY = 0.02;  // The car visits a point every 0.02 seconds.
 
 // Checks if the SocketIO event has JSON data.
 // If there is data the JSON object in string format will be returned,
@@ -201,6 +205,119 @@ vector<vector<double>> loadMapWaypoints() {
     return {map_waypoints_x, map_waypoints_y, map_waypoints_dx, map_waypoints_dy, map_waypoints_s};
 }
 
+double getLaneCenterDCoordinate(int lane) {
+    return LANE_RELATIVE_CENTER + LANE_LENGTH * lane;
+}
+
+bool isObjectInLane(int lane, double objectD) {
+    return (objectD < LANE_RELATIVE_CENTER + LANE_LENGTH * lane + LANE_RELATIVE_CENTER) &&
+            (objectD > LANE_RELATIVE_CENTER + LANE_LENGTH * lane - LANE_RELATIVE_CENTER);
+}
+
+bool canChangeLeft(int lane,
+                   double ego_car_s,
+                   int previous_size,
+                   vector<vector<double>> objects_in_left_lane,
+                   vector<vector<double>> objects_in_center_lane,
+                   vector<vector<double>> objects_in_right_lane) {
+    if (lane == LEFT_LANE) {
+        return false;
+    } else {
+        vector<vector<double>> objects_in_target_lane;
+
+        if (lane == CENTER_LANE) {
+            objects_in_target_lane = objects_in_left_lane;
+        } else {
+            objects_in_target_lane = objects_in_center_lane;
+        }
+
+        if (objects_in_target_lane.size() == 0) {
+            return true;
+        }
+
+        for (int i = 0; i < objects_in_target_lane.size(); i++) {
+            vector<double> detected_object = objects_in_target_lane[i];
+
+            double object_velocity_x = detected_object[3];
+            double object_velocity_y = detected_object[4];
+
+            double object_speed = sqrt(object_velocity_x * object_velocity_x +
+                                       object_velocity_y * object_velocity_y);
+            double object_s = detected_object[5];
+
+            // If we are using previous points we can project s value into the future
+            object_s += (double) previous_size * CAR_POINT_FREQUENCY * object_speed;
+
+            double is_object_in_front_of_ego_car = object_s > ego_car_s;
+            double is_object_in_front_of_ego_car_too_close = object_s - ego_car_s < 30; // Is the gap less than 30 meters?
+            double is_object_behind_ego_car = !is_object_in_front_of_ego_car;
+            double is_object_behind_ego_car_too_close = ego_car_s - object_s < 50;  // Is the gap less than 50 meters?
+
+            if (is_object_in_front_of_ego_car && is_object_in_front_of_ego_car_too_close) {
+                return false;
+            }
+
+            if (is_object_behind_ego_car && is_object_behind_ego_car_too_close) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+}
+
+bool canChangeRight(int lane,
+                    double ego_car_s,
+                    int previous_size,
+                    vector<vector<double>> objects_in_left_lane,
+                    vector<vector<double>> objects_in_center_lane,
+                    vector<vector<double>> objects_in_right_lane) {
+    if (lane == RIGHT_LANE) {
+        return false;
+    } else {
+        vector<vector<double>> objects_in_target_lane;
+
+        if (lane == CENTER_LANE) {
+            objects_in_target_lane = objects_in_right_lane;
+        } else {
+            objects_in_target_lane = objects_in_center_lane;
+        }
+
+        if (objects_in_target_lane.size() == 0) {
+            return true;
+        }
+
+        for (int i = 0; i < objects_in_target_lane.size(); i++) {
+            vector<double> detected_object = objects_in_target_lane[i];
+
+            double object_velocity_x = detected_object[3];
+            double object_velocity_y = detected_object[4];
+
+            double object_speed = sqrt(object_velocity_x * object_velocity_x +
+                                       object_velocity_y * object_velocity_y);
+            double object_s = detected_object[5];
+
+            // If we are using previous points we can project s value into the future
+            object_s += (double) previous_size * CAR_POINT_FREQUENCY * object_speed;
+
+            double is_object_in_front_of_ego_car = object_s > ego_car_s;
+            double is_object_in_front_of_ego_car_too_close = object_s - ego_car_s < 30; // Is the gap less than 30 meters?
+            double is_object_behind_ego_car = !is_object_in_front_of_ego_car;
+            double is_object_behind_ego_car_too_close = ego_car_s - object_s < 50;  // Is the gap less than 50 meters?
+
+            if (is_object_in_front_of_ego_car && is_object_in_front_of_ego_car_too_close) {
+                return false;
+            }
+
+            if (is_object_behind_ego_car && is_object_behind_ego_car_too_close) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+}
+
 int main() {
     uWS::Hub h;
 
@@ -213,9 +330,9 @@ int main() {
     vector<double> map_waypoints_s = map_waypoints[4];
 
     int lane = CENTER_LANE;
-    double reference_vel = 0;  //mph
+    double reference_velocity = 0;  //mph
 
-  h.onMessage([&reference_vel, &map_waypoints_x, &map_waypoints_y, &map_waypoints_s, &map_waypoints_dx, &map_waypoints_dy, &lane]
+  h.onMessage([&reference_velocity, &map_waypoints_x, &map_waypoints_y, &map_waypoints_s, &map_waypoints_dx, &map_waypoints_dy, &lane]
                       (uWS::WebSocket<uWS::SERVER != 0u> ws, char *data, size_t length, uWS::OpCode opCode) {
     // "42" at the start of the message means there's a websocket message event.
     // The 4 signifies a websocket message
@@ -259,100 +376,105 @@ int main() {
                   int previous_size = previous_path_x.size();
 
                   if (previous_size > 0) {
-                      ego_car_s = end_path_s;
+                      ego_car_s = end_path_s;  // Our car is at the end of the previous path
                   }
 
                   bool too_close = false;
-                  bool too_close_left = false;
-                  bool too_close_right = false;
+                  bool car_in_my_lane = false;
 
-                  // Find reference_v to use
-                  for (auto &object : sensor_fusion) {
-                      // There's an object in my lane
-                      float d = object[6];
+                  vector<vector<double>> objects_in_left_lane;
+                  vector<vector<double>> objects_in_center_lane;
+                  vector<vector<double>> objects_in_right_lane;
 
-                      if (d > (2 + 4 * (lane + 1) - 2) && d < (2 + 4 * (lane + 1) + 2) && lane != 2) {
-                          double object_x_velocity = object[3];
-                          double object_y_velocity = object[4];
-                          double check_speed = sqrt(object_x_velocity * object_x_velocity + object_y_velocity * object_y_velocity);
-                          double check_car_s = object[5];
+                  for (int i = 0; i < sensor_fusion.size(); i++) {
+                      vector<double> detected_object = sensor_fusion[i];
+                      double object_d = detected_object[6];
 
-                          check_car_s += ((double) previous_size * 0.02 * check_speed);  // Projects s value outwards
+                      for (int j = 0; j < 3; j++) {
+                          bool is_my_lane = j == lane;
+                          if (isObjectInLane(j, object_d)) {
+                              // Calculate object's measurements.
 
-                          if ((-10 < (check_car_s - ego_car_s) && (check_car_s - ego_car_s) < 10)) {
-                              too_close_right = true;
-                          }
-                      }
-
-                      if (d > (2 + 4 * (lane - 1) + 2) && d < (2 + 4 * (lane - 1) + 2) && lane != 0) {
-                          double object_x_velocity = object[3];
-                          double object_y_velocity = object[4];
-                          double check_speed = sqrt(object_x_velocity * object_x_velocity + object_y_velocity * object_y_velocity);
-                          double check_car_s = object[5];
-
-                          check_car_s += ((double) previous_size * 0.02 * check_speed);  // Projects s value outwards
-
-                          if ((-10 < (check_car_s - ego_car_s) && (check_car_s - ego_car_s) < 10) ) {
-                              too_close_left = true;
-                          }
-                      }
-
-                      if (d > (2 + 4 * lane - 2) && d < (2 + 4 * lane + 2)) {
-                          double object_x_velocity = object[3];
-                          double object_y_velocity = object[4];
-                          double check_speed = sqrt(object_x_velocity * object_x_velocity + object_y_velocity * object_y_velocity);
-                          double check_car_s = object[5];
-
-                          check_car_s += ((double) previous_size * 0.02 * check_speed);  // Projects s value outwards
-
-                          if ((check_car_s > ego_car_s) && ((check_car_s - ego_car_s) < 30)) {
-                              // TODO Improve logic
-                              too_close = true;
-
-                              if (lane == LEFT_LANE && !too_close_right) {
-                                  lane = CENTER_LANE;
-                              } else if (lane == RIGHT_LANE && !too_close_left) {
-                                  lane = CENTER_LANE;
+                              if (j == LEFT_LANE) {
+                                  objects_in_left_lane.push_back(detected_object);
+                              } else if (j == CENTER_LANE) {
+                                  objects_in_center_lane.push_back(detected_object);
                               } else {
-                                  if (!too_close_left) {
-                                      lane = LEFT_LANE;
-                                  } else if (!too_close_right) {
-                                      lane = RIGHT_LANE;
-                                  }
+                                  objects_in_right_lane.push_back(detected_object);
                               }
 
+                              if (is_my_lane) {
+                                  double object_velocity_x = detected_object[3];
+                                  double object_velocity_y = detected_object[4];
 
-//                        if (lane > 0) {
-//                            lane -= 1;
-//                        } else if (lane < 2) {
-//                            lane += 1;
-//                        }
+                                  double object_speed = sqrt(object_velocity_x * object_velocity_x +
+                                                             object_velocity_y * object_velocity_y);
+                                  double object_s = detected_object[5];
+
+                                  // If we are using previous points we can project s value into the future
+                                  object_s += (double) previous_size * CAR_POINT_FREQUENCY * object_speed;
+
+                                  double is_object_in_front_of_ego_car = object_s > ego_car_s;
+                                  double is_object_in_front_of_ego_car_too_close = object_s - ego_car_s < 30; // Is the gap less than 30 meters?
+
+                                  car_in_my_lane = is_object_in_front_of_ego_car && is_object_in_front_of_ego_car_too_close;
+//                                  if (is_object_in_front_of_ego_car && is_object_in_front_of_ego_car_too_close) {
+//                                      // Do some logic here. Lower reference velocity so we don't crash into car in front of us.
+//                                      // Could also flag to change lanes.
+//                                      if (canChangeLeft(lane, previous_size, ego_car_s, objects_in_left_lane, objects_in_center_lane, objects_in_right_lane)) {
+//                                          lane -= 1;
+//                                      } else if (canChangeRight(lane, previous_size, ego_car_s, objects_in_left_lane, objects_in_center_lane, objects_in_right_lane)) {
+//                                          lane += 1;
+//                                      } else {
+//                                          too_close = true;
+//                                      }
+//                                  }
+                              }
                           }
+                      }
+                  }
+
+                  if (car_in_my_lane) {
+                      // Do some logic here. Lower reference velocity so we don't crash into car in front of us.
+                      // Could also flag to change lanes.
+                      if (canChangeLeft(lane, previous_size, ego_car_s, objects_in_left_lane, objects_in_center_lane, objects_in_right_lane)) {
+                          lane -= 1;
+                      } else if (canChangeRight(lane, previous_size, ego_car_s, objects_in_left_lane, objects_in_center_lane, objects_in_right_lane)) {
+                          lane += 1;
+                      } else {
+                          too_close = true;
                       }
                   }
 
                   if (too_close) {
-                      reference_vel -= 0.224;
-                  } else if(reference_vel < 49.5){
-                      reference_vel += 0.224;
+                      reference_velocity -= 0.224;
+                  } else if (reference_velocity < 49.5) {
+                      reference_velocity += 0.224;
                   }
 
+                  // Here we are creating a list of sample points that are evenly spaced (30 m)
+                  // Later we'll spline points inside this sample to smooth our transition.
                   vector<double> points_x;
                   vector<double> points_y;
 
+                  // Our reference values are the car's current position.
                   double reference_x = ego_car_x;
                   double reference_y = ego_car_y;
                   double reference_yaw = deg2rad(ego_car_yaw);
 
+                  // If previous path is almost empty, let's just use the car's position as starting reference.
                   if (previous_size < 2) {
                       double previous_car_x = ego_car_x - cos(ego_car_yaw);
                       double previous_car_y = ego_car_y - sin(ego_car_yaw);
 
+                      // Create two points that are tangent to the car's angle.
                       points_x.push_back(previous_car_x);
                       points_x.push_back(ego_car_x);
 
                       points_y.push_back(previous_car_y);
                       points_y.push_back(ego_car_y);
+
+                  // Given the past has enough length, we'll use the last point of it as our starting reference.
                   } else {
                       reference_x = previous_path_x[previous_size - 1];
                       reference_y = previous_path_y[previous_size - 1];
@@ -361,6 +483,7 @@ int main() {
                       double reference_y_prev = previous_path_y[previous_size - 2];
                       reference_yaw = atan2(reference_y - reference_y_prev, reference_x - reference_x_prev);
 
+                      // Add two points that are tangent to the car's angle.
                       points_x.push_back(reference_x_prev);
                       points_x.push_back(reference_x);
 
@@ -368,18 +491,25 @@ int main() {
                       points_y.push_back(reference_y);
                   }
 
-                  vector<double> next_waypoint_0 = getXY(ego_car_s + 30, 2 + 4 * lane, map_waypoints_s, map_waypoints_x, map_waypoints_y);
-                  vector<double> next_waypoint_1 = getXY(ego_car_s + 60, 2 + 4 * lane, map_waypoints_s, map_waypoints_x, map_waypoints_y);
-                  vector<double> next_waypoint_2 = getXY(ego_car_s + 90, 2 + 4 * lane, map_waypoints_s, map_waypoints_x, map_waypoints_y);
+                  // Next, we are going to add 3 evenly spaced points in Frenet's coordinates.
+                  unsigned short SAMPLE_POINTS = 3;
+                  unsigned short DISTANCE = 30;  // Meters
 
-                  points_x.push_back(next_waypoint_0[0]);
-                  points_x.push_back(next_waypoint_1[0]);
-                  points_x.push_back(next_waypoint_2[0]);
+                  for (unsigned short i = 1; i <= SAMPLE_POINTS; i++) {
+                      double waypoint_s = ego_car_s + DISTANCE * i;
+                      double waypoint_d = getLaneCenterDCoordinate(lane);
+                      vector<double> next_waypoint = getXY(waypoint_s, waypoint_d, map_waypoints_s, map_waypoints_x,
+                                                           map_waypoints_y);
 
-                  points_y.push_back(next_waypoint_0[1]);
-                  points_y.push_back(next_waypoint_1[1]);
-                  points_y.push_back(next_waypoint_2[1]);
+                      // Add waypoint to path
+                      points_x.push_back(next_waypoint[0]);
+                      points_y.push_back(next_waypoint[1]);
+                  }
 
+                  // Now we have 5 points in our path!
+
+                  // Here we are shifting our coordinate system to car's POV, so the last point of the previous
+                  // path is located at the origin (0, 0) and the car's angle is 0°.
                   for (unsigned short i = 0; i < points_x.size(); i++) {
                       double shift_x = points_x[i] - reference_x;
                       double shift_y = points_y[i] - reference_y;
@@ -394,6 +524,7 @@ int main() {
                   // Set (x, y) points to the spline
                   spline.set_points(points_x, points_y);
 
+                  // These are the actual points we are going to use to feed the simulator.
                   vector<double> next_x_values;
                   vector<double> next_y_values;
 
@@ -403,8 +534,8 @@ int main() {
                       next_y_values.push_back(previous_path_y[i]);
                   }
 
-                  // Calculate how to break up spline points so that we travel at our desired reference velocity
-                  double target_x = 30;
+                  // Calculate how to space spline points so that we travel at our desired reference velocity
+                  double target_x = 30;  // 30 meters. This is a horizon value
                   double target_y = spline(target_x);
                   double target_x_squared = target_x * target_x;
                   double target_y_squared = target_y * target_y;
@@ -412,9 +543,11 @@ int main() {
 
                   double x_add_on = 0;
 
-                  for (unsigned short i = 1; i <= 50 - previous_path_x.size(); i++) {
-                      double N = target_distance / (0.02 * reference_vel / 2.24);
-                      double x_point = x_add_on + target_x / N;
+                  int remaining_points = 50 - previous_path_x.size();
+                  for (unsigned short i = 1; i <= remaining_points; i++) {
+                      double number_of_points_in_spline_to_reach_target =
+                              target_distance / (CAR_POINT_FREQUENCY * reference_velocity / 2.24);  // 2.24 is used to transform to meters per second.
+                      double x_point = x_add_on + target_x / number_of_points_in_spline_to_reach_target;
                       double y_point = spline(x_point);
 
                       x_add_on = x_point;
@@ -422,7 +555,7 @@ int main() {
                       double x_reference = x_point;
                       double y_reference = y_point;
 
-                      // Rotate back to normal after rotating it earlier
+                      // Rotate back to normal after rotating it earlier. Reverts car's POV
                       x_point = x_reference * cos(reference_yaw) - y_reference * sin(reference_yaw);
                       y_point = x_reference * sin(reference_yaw) + y_reference * cos(reference_yaw);
 
@@ -435,7 +568,6 @@ int main() {
 
                   json msgJson;
 
-                  // TODO: define a path made up of (x, y) points that the car will visit sequentially every .02 seconds
                   msgJson["next_x"] = next_x_values;
                   msgJson["next_y"] = next_y_values;
 
