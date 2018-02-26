@@ -5,6 +5,7 @@
 #include <iostream>
 #include <thread>
 #include <vector>
+#include <stdlib.h>
 #include <cfloat>
 #include "Eigen-3.3/Eigen/Core"
 #include "Eigen-3.3/Eigen/QR"
@@ -214,14 +215,15 @@ bool isObjectInLane(int lane, double objectD) {
             (objectD > LANE_RELATIVE_CENTER + LANE_LENGTH * lane - LANE_RELATIVE_CENTER);
 }
 
-bool canChangeLeft(int lane,
+double turnLeftCost(int lane,
                    double ego_car_s,
+                   double ego_car_speed,
                    int previous_size,
                    vector<vector<double>> objects_in_left_lane,
                    vector<vector<double>> objects_in_center_lane,
                    vector<vector<double>> objects_in_right_lane) {
     if (lane == LEFT_LANE) {
-        return false;
+        return 1000000.0;
     } else {
         vector<vector<double>> objects_in_target_lane;
 
@@ -232,9 +234,10 @@ bool canChangeLeft(int lane,
         }
 
         if (objects_in_target_lane.size() == 0) {
-            return true;
+            return 0;
         }
 
+        double cost = 1000.0;
         for (int i = 0; i < objects_in_target_lane.size(); i++) {
             vector<double> detected_object = objects_in_target_lane[i];
 
@@ -248,32 +251,28 @@ bool canChangeLeft(int lane,
             // If we are using previous points we can project s value into the future
             object_s += (double) previous_size * CAR_POINT_FREQUENCY * object_speed;
 
-            double is_object_in_front_of_ego_car = object_s > ego_car_s;
-            double is_object_in_front_of_ego_car_too_close = object_s - ego_car_s < 30; // Is the gap less than 30 meters?
-            double is_object_behind_ego_car = !is_object_in_front_of_ego_car;
-            double is_object_behind_ego_car_too_close = ego_car_s - object_s < 50;  // Is the gap less than 50 meters?
-
-            if (is_object_in_front_of_ego_car && is_object_in_front_of_ego_car_too_close) {
-                return false;
+            if (abs(object_s - ego_car_s) < 22.5) {
+                return -1;
             }
 
-            if (is_object_behind_ego_car && is_object_behind_ego_car_too_close) {
-                return false;
+            if (cost > abs(object_s - ego_car_s)) {
+                cost = abs(object_s - ego_car_s);
             }
         }
 
-        return true;
+        return 1.0 / (cost + objects_in_target_lane.size());
     }
 }
 
-bool canChangeRight(int lane,
+double turnRightCost(int lane,
                     double ego_car_s,
+                    double ego_car_speed,
                     int previous_size,
                     vector<vector<double>> objects_in_left_lane,
                     vector<vector<double>> objects_in_center_lane,
                     vector<vector<double>> objects_in_right_lane) {
     if (lane == RIGHT_LANE) {
-        return false;
+        return 1000000.0;
     } else {
         vector<vector<double>> objects_in_target_lane;
 
@@ -284,9 +283,10 @@ bool canChangeRight(int lane,
         }
 
         if (objects_in_target_lane.size() == 0) {
-            return true;
+            return 0;
         }
 
+        double cost = 1000.0;
         for (int i = 0; i < objects_in_target_lane.size(); i++) {
             vector<double> detected_object = objects_in_target_lane[i];
 
@@ -300,21 +300,16 @@ bool canChangeRight(int lane,
             // If we are using previous points we can project s value into the future
             object_s += (double) previous_size * CAR_POINT_FREQUENCY * object_speed;
 
-            double is_object_in_front_of_ego_car = object_s > ego_car_s;
-            double is_object_in_front_of_ego_car_too_close = object_s - ego_car_s < 30; // Is the gap less than 30 meters?
-            double is_object_behind_ego_car = !is_object_in_front_of_ego_car;
-            double is_object_behind_ego_car_too_close = ego_car_s - object_s < 50;  // Is the gap less than 50 meters?
-
-            if (is_object_in_front_of_ego_car && is_object_in_front_of_ego_car_too_close) {
-                return false;
+            if (abs(object_s - ego_car_s) < 22.5) {
+                return -1;
             }
 
-            if (is_object_behind_ego_car && is_object_behind_ego_car_too_close) {
-                return false;
+            if (cost > abs(object_s - ego_car_s)) {
+                cost = abs(object_s - ego_car_s);
             }
         }
 
-        return true;
+        return 1.0 / (cost + objects_in_target_lane.size());
     }
 }
 
@@ -382,9 +377,9 @@ int main() {
                   bool too_close = false;
                   bool car_in_my_lane = false;
 
-                  vector<vector<double>> objects_in_left_lane;
-                  vector<vector<double>> objects_in_center_lane;
-                  vector<vector<double>> objects_in_right_lane;
+                  vector<vector<double>> objects_in_left_lane = {};
+                  vector<vector<double>> objects_in_center_lane = {};
+                  vector<vector<double>> objects_in_right_lane = {};
 
                   for (int i = 0; i < sensor_fusion.size(); i++) {
                       vector<double> detected_object = sensor_fusion[i];
@@ -393,7 +388,6 @@ int main() {
                       for (int j = 0; j < 3; j++) {
                           bool is_my_lane = j == lane;
                           if (isObjectInLane(j, object_d)) {
-                              // Calculate object's measurements.
 
                               if (j == LEFT_LANE) {
                                   objects_in_left_lane.push_back(detected_object);
@@ -415,41 +409,61 @@ int main() {
                                   object_s += (double) previous_size * CAR_POINT_FREQUENCY * object_speed;
 
                                   double is_object_in_front_of_ego_car = object_s > ego_car_s;
-                                  double is_object_in_front_of_ego_car_too_close = object_s - ego_car_s < 30; // Is the gap less than 30 meters?
+                                  double is_object_in_front_of_ego_car_too_close = object_s - ego_car_s < 25; // Is the gap less than 25 meters?
 
                                   car_in_my_lane = is_object_in_front_of_ego_car && is_object_in_front_of_ego_car_too_close;
-//                                  if (is_object_in_front_of_ego_car && is_object_in_front_of_ego_car_too_close) {
-//                                      // Do some logic here. Lower reference velocity so we don't crash into car in front of us.
-//                                      // Could also flag to change lanes.
-//                                      if (canChangeLeft(lane, previous_size, ego_car_s, objects_in_left_lane, objects_in_center_lane, objects_in_right_lane)) {
-//                                          lane -= 1;
-//                                      } else if (canChangeRight(lane, previous_size, ego_car_s, objects_in_left_lane, objects_in_center_lane, objects_in_right_lane)) {
-//                                          lane += 1;
-//                                      } else {
-//                                          too_close = true;
-//                                      }
-//                                  }
+                                  if (is_object_in_front_of_ego_car && is_object_in_front_of_ego_car_too_close) {
+                                      // Do some logic here. Lower reference velocity so we don't crash into car in front of us.
+                                      // Could also flag to change lanes.
+                                      too_close = true;
+
+                                      double costOfTurningLeft = turnLeftCost(lane, ego_car_s, ego_car_speed, previous_size, objects_in_left_lane, objects_in_center_lane, objects_in_right_lane);
+                                      double costOfTurningRight = turnRightCost(lane, ego_car_s, ego_car_speed, previous_size, objects_in_left_lane, objects_in_center_lane, objects_in_right_lane);
+
+                                      cout << "cost of turning LEFT " << costOfTurningLeft << endl;
+                                      cout << "cost of turning RIGHT " << costOfTurningRight << endl;
+
+
+                                      if (costOfTurningLeft < costOfTurningRight) {
+                                          if (costOfTurningLeft >= 0 && costOfTurningLeft <= 1) {
+                                              lane -= 1;
+                                          } else if (costOfTurningRight >= 0 && costOfTurningRight <= 1){
+                                              lane += 1;
+                                          }
+                                      } else {
+                                          if (costOfTurningRight >= 0 && costOfTurningRight <= 1) {
+                                              lane += 1;
+                                          } else if (costOfTurningLeft >= 0 && costOfTurningLeft <= 1){
+                                              lane -= 1;
+                                          }
+                                      }
+                                  }
                               }
                           }
                       }
                   }
 
-                  if (car_in_my_lane) {
-                      // Do some logic here. Lower reference velocity so we don't crash into car in front of us.
-                      // Could also flag to change lanes.
-                      if (canChangeLeft(lane, previous_size, ego_car_s, objects_in_left_lane, objects_in_center_lane, objects_in_right_lane)) {
-                          lane -= 1;
-                      } else if (canChangeRight(lane, previous_size, ego_car_s, objects_in_left_lane, objects_in_center_lane, objects_in_right_lane)) {
-                          lane += 1;
-                      } else {
-                          too_close = true;
-                      }
-                  }
+//                  cout << "car in my lane " << car_in_my_lane << endl;
+//                  cout << "too_close " << too_close << endl;
+//
+//                  if (car_in_my_lane) {
+//                      // Do some logic here. Lower reference velocity so we don't crash into car in front of us.
+//                      // Could also flag to change lanes.
+//                      too_close = true;
+//                      if (turnLeftCost(lane, previous_size, ego_car_s, ego_car_speed, objects_in_left_lane, objects_in_center_lane, objects_in_right_lane)) {
+//                          lane -= 1;
+//                      } else if (turnRightCost(lane, previous_size, ego_car_s, ego_car_speed, objects_in_left_lane, objects_in_center_lane, objects_in_right_lane)) {
+//                          lane += 1;
+//                      } else {
+//                          too_close = true;
+//                      }
+//                  }
 
                   if (too_close) {
-                      reference_velocity -= 0.224;
+                      reference_velocity -= 0.300;
+                      // reference_velocity -= 0.224;
                   } else if (reference_velocity < 49.5) {
-                      reference_velocity += 0.224;
+                      reference_velocity += 0.300;
                   }
 
                   // Here we are creating a list of sample points that are evenly spaced (30 m)
