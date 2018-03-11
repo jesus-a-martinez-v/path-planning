@@ -413,8 +413,6 @@ int main() {
 
                                   car_in_my_lane = is_object_in_front_of_ego_car && is_object_in_front_of_ego_car_too_close;
                                   if (is_object_in_front_of_ego_car && is_object_in_front_of_ego_car_too_close) {
-                                      // Do some logic here. Lower reference velocity so we don't crash into car in front of us.
-                                      // Could also flag to change lanes.
                                       too_close = true;
 
                                       double costOfTurningLeft = turnLeftCost(lane, ego_car_s, ego_car_speed, previous_size, objects_in_left_lane, objects_in_center_lane, objects_in_right_lane);
@@ -443,25 +441,8 @@ int main() {
                       }
                   }
 
-//                  cout << "car in my lane " << car_in_my_lane << endl;
-//                  cout << "too_close " << too_close << endl;
-//
-//                  if (car_in_my_lane) {
-//                      // Do some logic here. Lower reference velocity so we don't crash into car in front of us.
-//                      // Could also flag to change lanes.
-//                      too_close = true;
-//                      if (turnLeftCost(lane, previous_size, ego_car_s, ego_car_speed, objects_in_left_lane, objects_in_center_lane, objects_in_right_lane)) {
-//                          lane -= 1;
-//                      } else if (turnRightCost(lane, previous_size, ego_car_s, ego_car_speed, objects_in_left_lane, objects_in_center_lane, objects_in_right_lane)) {
-//                          lane += 1;
-//                      } else {
-//                          too_close = true;
-//                      }
-//                  }
-
                   if (too_close) {
                       reference_velocity -= 0.300;
-                      // reference_velocity -= 0.224;
                   } else if (reference_velocity < 49.5) {
                       reference_velocity += 0.300;
                   }
